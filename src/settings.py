@@ -24,7 +24,8 @@ class Settings(BaseSettings):
 
     # Model config
     GEMINI_API_KEY: str
-    MODEL_NAME: str = "gemini-2.0-flash"
+    OCR_MODEL_NAME: str = "gemini-2.0-flash-lite"
+    TEXT_MODEL_NAME: str = "gemini-2.5-flash-lite"
     MAX_OUTPUT_TOKENS: int = 8192
 
     # Request limitation

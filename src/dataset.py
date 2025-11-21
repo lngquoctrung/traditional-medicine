@@ -37,6 +37,7 @@ QUY TẮC:
 4. Nếu một phần KHÔNG CÓ THÔNG TIN -> ghi rõ: "Không có thông tin"
 5. KHÔNG được để trống hay null
 6. Sửa lỗi chính tả OCR
+7. TUYỆT ĐỐI KHÔNG lặp lại một câu hoặc một đoạn văn quá 2 lần. Nếu văn bản gốc bị lỗi lặp, hãy chỉ lấy thông tin một lần duy nhất.
 
 JSON OUTPUT:
 {{
@@ -240,6 +241,7 @@ class DataExtractor:
                 - Đơn thuốc và liều dùng
                 3. LOẠI BỎ: Header, footer, số trang, watermark
                 4. Nếu vị thuốc bị cắt giữa chừng -> giữ nguyên, đừng bỏ
+                5. TUYỆT ĐỐI KHÔNG lặp lại một câu hoặc một đoạn văn quá 2 lần. Nếu văn bản gốc bị lỗi lặp, hãy chỉ lấy thông tin một lần duy nhất.
 
                 Bắt đầu trích xuất trang {start_page}-{end_page}:
             """
@@ -247,7 +249,7 @@ class DataExtractor:
             for retry in range(self.settings.MAX_RETRIES):
                 try:
                     response = self.gemini_client.models.generate_content(
-                        model=self.settings.MODEL_NAME,
+                        model=self.settings.OCR_MODEL_NAME,
                         contents=[uploaded_file, extraction_prompt],
                         config=types.GenerateContentConfig(
                             temperature=0.0,
@@ -306,14 +308,14 @@ class DataExtractor:
 
     def _call_gemini_with_retry(self, prompt: str, chunk_info: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
         last_exception = None
-        
+
         for attempt in range(self.settings.MAX_RETRIES):
             try:
                 self.logger.info(f"API call {attempt + 1}/{self.settings.MAX_RETRIES}")
                 current_temperature = 0.0 if attempt == 0 else min(0.1 + (attempt * 0.15), 1.0)
 
                 response = self.gemini_client.models.generate_content(
-                    model=self.settings.MODEL_NAME,
+                    model=self.settings.TEXT_MODEL_NAME,
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         temperature=current_temperature,
@@ -486,7 +488,8 @@ class DataExtractor:
 
     def process_pdf_file(self, pdf_path: str) -> Dict[str, Any]:
         self.logger.info(f"Processing: {safe_path(pdf_path)}")
-        self.logger.info(f"Model: {self.settings.MODEL_NAME}")
+        self.logger.info(f"Model for OCR: {self.settings.OCR_MODEL_NAME}")
+        self.logger.info(f"Model for text extraction: {self.settings.TEXT_MODEL_NAME}")
         self.logger.info(f"Rate limit: {self.settings.REQUESTS_PER_MINUTE} RPM")
         
         pdf_path_obj = Path(pdf_path)
