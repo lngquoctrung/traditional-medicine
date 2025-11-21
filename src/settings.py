@@ -19,13 +19,13 @@ class Settings(BaseSettings):
     # Processing config
     PAGES_PER_CHUNK: int = 200
     OVERLAP_PAGES: int = 30
-    PROCESS_PAGES_PER_REQUEST: int = 8
+    PROCESS_PAGES_PER_REQUEST: int = 6
     PROCESS_OVERLAP_PAGES: int = 3
 
     # Model config
     GEMINI_API_KEY: str
     MODEL_NAME: str = "gemini-2.0-flash"
-    MAX_OUTPUT_TOKENS: int = 16384
+    MAX_OUTPUT_TOKENS: int = 8192
 
     # Request limitation
     REQUESTS_PER_MINUTE: int = 15

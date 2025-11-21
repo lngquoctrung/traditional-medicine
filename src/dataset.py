@@ -2,6 +2,7 @@ import os
 import random
 import json
 import time
+import re
 import hashlib
 import pandas as pd
 
@@ -228,15 +229,19 @@ class DataExtractor:
             end_page = min(start_page + process_pages_per_request - 1, total_pages)
             
             extraction_prompt = f"""
-                Trích xuất TOÀN BỘ nội dung từ trang {start_page} đến trang {end_page}.
+                Trích xuất VĂN BẢN từ trang {start_page} đến trang {end_page} của PDF.
 
                 YÊU CẦU:
-                1. Giữ nguyên CẤU TRÚC và ĐỊNH DẠNG gốc
-                2. KHÔNG bỏ qua nội dung nào, kể cả nội dung bị cắt giữa chừng
-                3. Loại bỏ: header, footer, số trang, watermark
-                4. Sửa lỗi chính tả OCR rõ ràng
+                1. Trích xuất TOÀN BỘ nội dung từ các trang này
+                2. GIỮ NGUYÊN:
+                - Tiêu đề vị thuốc (IN HOA + chữ Hán)
+                - Các phần A, B, C, D, E
+                - Tên khoa học, công thức hóa học
+                - Đơn thuốc và liều dùng
+                3. LOẠI BỎ: Header, footer, số trang, watermark
+                4. Nếu vị thuốc bị cắt giữa chừng -> giữ nguyên, đừng bỏ
 
-                Trang {start_page}-{end_page}:
+                Bắt đầu trích xuất trang {start_page}-{end_page}:
             """
             
             for retry in range(self.settings.MAX_RETRIES):
@@ -305,18 +310,27 @@ class DataExtractor:
         for attempt in range(self.settings.MAX_RETRIES):
             try:
                 self.logger.info(f"API call {attempt + 1}/{self.settings.MAX_RETRIES}")
-                
+                current_temperature = 0.0 if attempt == 0 else min(0.1 + (attempt * 0.15), 1.0)
+
                 response = self.gemini_client.models.generate_content(
                     model=self.settings.MODEL_NAME,
                     contents=prompt,
                     config=types.GenerateContentConfig(
-                        temperature=0.1,
+                        temperature=current_temperature,
                         response_mime_type="application/json",
-                        max_output_tokens=self.settings.MAX_OUTPUT_TOKENS
+                        max_output_tokens=self.settings.MAX_OUTPUT_TOKENS,
                     )
                 )
-                
                 # Parse and validate
+                print("="*80)
+                print("DEBUG")
+                print("="*80)
+
+                print("="*80)
+                print("RESPONSE TEXT")
+                print(response.text)
+                print("="*80)
+
                 result = json.loads(response.text)
                 result = validate_json_structure(result)
                 
