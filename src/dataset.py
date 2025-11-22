@@ -717,6 +717,9 @@ class DataExtractor:
         if not pdf_path_obj.exists():
             raise FileNotFoundError(f"PDF file not found: {pdf_path}")
         
+        # Create folder store checkpoint
+        os.makedirs(self.settings.PROCESSED_DATA_PATH, exist_ok=True)
+
         checkpoint = self._load_checkpoint() if skip_processed else {'processed_chunks': [], 'all_results': {'vi_thuoc': [], 'bai_thuoc': [], 'cong_thuc': []}}
         processed_chunk_ids = set(checkpoint.get('processed_chunks', []))
         
