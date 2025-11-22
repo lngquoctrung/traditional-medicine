@@ -19,12 +19,12 @@ class Settings(BaseSettings):
     # Processing config
     PAGES_PER_CHUNK: int = 200
     OVERLAP_PAGES: int = 30
-    PROCESS_PAGES_PER_REQUEST: int = 6
+    PROCESS_PAGES_PER_REQUEST: int = 7
     PROCESS_OVERLAP_PAGES: int = 3
 
     # Model config
     GEMINI_API_KEY: str
-    OCR_MODEL_NAME: str = "gemini-2.0-flash-lite"
+    OCR_MODEL_NAME: str = "gemini-2.5-flash-lite"
     TEXT_MODEL_NAME: str = "gemini-2.5-flash-lite"
     MAX_OUTPUT_TOKENS: int = 8192
 

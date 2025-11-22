@@ -230,18 +230,21 @@ class DataExtractor:
             end_page = min(start_page + process_pages_per_request - 1, total_pages)
             
             extraction_prompt = f"""
-                Trích xuất VĂN BẢN từ trang {start_page} đến trang {end_page} của PDF.
+                Trích xuất VĂN BẢN từ trang {start_page} đến trang {end_page} của PDF 2 CỘT (kiểu IEEE).
+
+                LƯU Ý QUAN TRỌNG: Trả về TEXT gốc, KHÔNG tóm tắt.
 
                 YÊU CẦU:
-                1. Trích xuất TOÀN BỘ nội dung từ các trang này
-                2. GIỮ NGUYÊN:
+                1. ĐỌC ĐÚNG THỨ TỰ: Cột trái hoàn chỉnh → Cột phải
+                2. Trích xuất TOÀN BỘ nội dung từ các trang này
+                3. GIỮ NGUYÊN:
                 - Tiêu đề vị thuốc (IN HOA + chữ Hán)
                 - Các phần A, B, C, D, E
                 - Tên khoa học, công thức hóa học
                 - Đơn thuốc và liều dùng
-                3. LOẠI BỎ: Header, footer, số trang, watermark
-                4. Nếu vị thuốc bị cắt giữa chừng -> giữ nguyên, đừng bỏ
-                5. TUYỆT ĐỐI KHÔNG lặp lại một câu hoặc một đoạn văn quá 2 lần. Nếu văn bản gốc bị lỗi lặp, hãy chỉ lấy thông tin một lần duy nhất.
+                4. LOẠI BỎ: Header, footer, số trang, watermark "https://trungtamthuoc.com/", chú thích hình ảnh riêng lẻ
+                5. Nếu vị thuốc bị cắt giữa chừng -> giữ nguyên, đừng bỏ
+                6. TUYỆT ĐỐI KHÔNG lặp lại một câu hoặc một đoạn văn quá 2 lần. Nếu văn bản gốc bị lỗi lặp, hãy chỉ lấy thông tin một lần duy nhất.
 
                 Bắt đầu trích xuất trang {start_page}-{end_page}:
             """
@@ -561,7 +564,7 @@ class DataExtractor:
                 self.logger.error(f"Error processing chunk {chunk_idx + 1}: {e}")
                 total_failed_chunks += 1
                 continue
-        
+
         # Deduplicate and save
         self.logger.info("Post-processing results...")
         
