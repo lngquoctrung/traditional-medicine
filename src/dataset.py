@@ -2,16 +2,18 @@ import os
 import random
 import json
 import time
-import re
 import hashlib
 import pandas as pd
 
-from difflib import SequenceMatcher
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from collections import deque
+from datetime import datetime, timedelta
 from google.genai import types
 from google import genai
 from pypdf import PdfReader, PdfWriter
+from difflib import SequenceMatcher
+from typing import List, Dict, Any, Optional
+
 from .utils import get_logger, safe_path, validate_json_structure
 
 EXTRACTION_PROMPT = """
@@ -24,58 +26,53 @@ CẤU TRÚC VỊ THUỐC:
 - Còn gọi là: tên khác
 - Tên khoa học: Latin
 - Thuộc họ: họ thực vật
-- A. Mô tả cây
-- B. Phân bố, thu hái, chế biến
-- C. Thành phần hóa học
-- D. Tác dụng dược lý
-- E. Công dụng và liều dùng
+- Mô tả cây
+- Phân bố, thu hái, chế biến
+- Thành phần hóa học
+- Tác dụng dược lý
+- Công dụng và liều dùng
 
 QUY TẮC:
-1. BUỘC PHẢI có đủ 5 phần A, B, C, D, E mới trích xuất
-2. Văn bản BẮT ĐẦU giữa chừng (không có tiêu đề) -> BỎ QUA
-3. Văn bản KẾT THÚC giữa chừng (thiếu phần E) -> BỎ QUA
-4. Nếu một phần KHÔNG CÓ THÔNG TIN -> ghi rõ: "Không có thông tin"
-5. KHÔNG được để trống hay null
-6. Sửa lỗi chính tả OCR
-7. TUYỆT ĐỐI KHÔNG lặp lại một câu hoặc một đoạn văn quá 2 lần. Nếu văn bản gốc bị lỗi lặp, hãy chỉ lấy thông tin một lần duy nhất.
+1. Văn bản BẮT ĐẦU giữa chừng (không có tiêu đề) -> BỎ QUA
+2. Văn bản KẾT THÚC giữa chừng (thiếu các thông như như thành phần hóa học hay công dụng và liều dùng) -> BỎ QUA
+3. Nếu một phần KHÔNG CÓ THÔNG TIN -> ghi rõ: "Không có thông tin"
+4. KHÔNG được để trống hay null
+5. Sửa lỗi chính tả OCR
+6. TUYỆT ĐỐI KHÔNG lặp lại một câu hoặc một đoạn văn quá 2 lần. Nếu văn bản gốc bị lỗi lặp, hãy chỉ lấy thông tin một lần duy nhất.
+7. SAU KHI HOÀN THÀNH JSON, PHẢI GHI ###END### để đánh dấu kết thúc
 
 JSON OUTPUT:
-{{
-  "vi_thuoc": [
-    {{
-      "ten_viet_nam": "TÊN IN HOA (không chữ Hán)",
-      "ten_goi_khac": "Tên khác; phân cách bằng ;",
-      "ten_khoa_hoc": "Tên Latin đầy đủ",
-      "ho_thuc_vat": "Họ thực vật",
-      "mo_ta": "Phần A - Mô tả chi tiết",
-      "phan_bo_thu_hai_che_bien": "Phần B - Phân bố và thu hái",
-      "thanh_phan_hoa_hoc": "Phần C - Thành phần hóa học",
-      "tac_dung_duoc_ly": "Phần D - Tác dụng dược lý",
-      "tinh_vi": "Tính vị từ phần E",
-      "quy_kinh": "Kinh lạc từ phần E",
-      "cong_dung": "Phần E - Công dụng điều trị",
-      "lieu_dung": "Phần E - Liều dùng (gram/ngày)",
-      "ghi_chu": "Chống chỉ định từ phần E"
-    }}
-  ],
-  "bai_thuoc": [
-    {{
-      "ten_bai_thuoc": "Tên đơn thuốc",
-      "chu_tri": "Bệnh trị",
-      "nguon_goc": "Nguồn gốc",
-      "ghi_chu": "Cách sắc, dùng"
-    }}
-  ],
-  "cong_thuc": [
-    {{
-      "ten_bai_thuoc": "Tên đơn KHỚP bai_thuoc",
-      "ten_vi_thuoc": "Tên vị KHỚP vi_thuoc",
-      "lieu_luong": "Số lượng",
-      "vai_tro": "Vai trò",
-      "ghi_chu_che_bien": "Chế biến đặc biệt"
-    }}
-  ]
-}}
+{
+  "vi_thuoc": [{
+    "ten_vietnam": "TÊN (IN HOA) + chữ Hán",
+    "ten_goi_khac": "Tên khác phân cách bằng ,",
+    "ten_khoa_hoc": "Tên Latin đầy đủ",
+    "ho_thuc_vat": "Họ thực vật",
+    "mo_ta": "Mô tả chi tiết",
+    "phan_bo_thu_hai_che_bien": "Phân bố và thu hái",
+    "thanh_phan_hoa_hoc": "Thành phần hóa học",
+    "tac_dung_duoc_ly": "Tác dụng dược lý",
+    "tinh_vi": "Tính vị",
+    "quy_kinh": "Kinh lạc",
+    "cong_dung": "Công dụng điều trị",
+    "lieu_dung": "Liều dùng (gram/ngày)",
+    "ghi_chu": "Chống chỉ định, độc tính..."
+  }],
+  "bai_thuoc": [{
+    "ten_bai_thuoc": "Tên đơn thuốc",
+    "chu_tri": "Bệnh trị",
+    "nguon_goc": "Nguồn gốc",
+    "ghi_chu": "Cách sắc, dùng..."
+  }],
+  "cong_thuc": [{
+    "ten_bai_thuoc": "Tên đơn (KHP) bài thuốc",
+    "ten_vi_thuoc": "Tên vị (KHP) vị thuốc",
+    "lieu_luong": "Số lượng",
+    "vai_tro": "Vai trò",
+    "ghi_chu_che_bien": "Chế biến đặc biệt"
+  }]
+}
+###END###
 
 CHÚ Ý:
 - JSON hợp lệ, không thêm ```
@@ -96,6 +93,8 @@ class DataExtractor:
         self.successful_chunks = 0
         self.failed_chunks = 0
         self.seen_hashes = set()
+        self.request_times = deque(maxlen=settings.REQUESTS_PER_MINUTE)
+        self.last_request_time = None
 
     def _split_pdf_file(self, input_path: str, output_dir: str, 
                         pages_per_chunk: int = 400, overlap_pages: int = 50) -> list:
@@ -161,13 +160,295 @@ class DataExtractor:
         
         return uploaded_file
 
+    def wait_for_rate_limit(self):
+        current_time = datetime.now()
+        one_minute_ago = current_time - timedelta(minutes=1)
+        
+        while self.request_times and self.request_times[0] < one_minute_ago:
+            self.request_times.popleft()
+
+        if len(self.request_times) >= self.settings.REQUESTS_PER_MINUTE:
+            wait_time = 60 - (current_time - self.request_times[0]).total_seconds()
+            if wait_time > 0:
+                self.logger.info(f"Rate limit approaching. Waiting {wait_time:.1f}s")
+                time.sleep(wait_time + 1)
+        
+        min_delay = 60.0 / self.settings.REQUESTS_PER_MINUTE
+        if self.last_request_time:
+            elapsed = (current_time - self.last_request_time).total_seconds()
+            if elapsed < min_delay:
+                time.sleep(min_delay - elapsed)
+        
+        self.request_times.append(datetime.now())
+        self.last_request_time = datetime.now()
+
+    def is_repetitive(self, text: str, threshold: float = 0.6) -> bool:
+        """Detect if text has repetitive patterns"""
+        if len(text) < 100:
+            return False
+        
+        words = text.split()
+        if len(words) < 20:
+            return False
+        
+        chunk_size = len(words) // 3
+        if chunk_size < 10:
+            return False
+            
+        chunk1 = ' '.join(words[:chunk_size])
+        chunk2 = ' '.join(words[chunk_size:chunk_size*2])
+        chunk3 = ' '.join(words[chunk_size*2:chunk_size*3])
+        
+        similarity_12 = self._calculate_similarity(chunk1, chunk2)
+        similarity_23 = self._calculate_similarity(chunk2, chunk3)
+        
+        return similarity_12 > threshold or similarity_23 > threshold
+
+    def _extract_with_model(self, uploaded_file: Any, prompt: str,
+                       model_name: str, start_page: int, end_page: int) -> Optional[str]:
+        for retry in range(self.settings.MAX_RETRIES):
+            try:
+                self.wait_for_rate_limit()
+                
+                response = self.gemini_client.models.generate_content(
+                    model=model_name,
+                    contents=[uploaded_file, prompt],
+                    config=types.GenerateContentConfig(
+                        temperature=0.0,
+                        max_output_tokens=self.settings.MAX_OUTPUT_TOKENS,
+                        stop_sequences=["###END###"]
+                    )
+                )
+                
+                if not response or not response.text:
+                    self.logger.warning(f"Empty response for pages {start_page}-{end_page}")
+                    if retry < self.settings.MAX_RETRIES - 1:
+                        time.sleep(5)
+                        continue
+                    return None
+                
+                text = response.text.strip()
+                
+                # Check repetition
+                if self.is_repetitive(text):
+                    self.logger.warning(f"Detected repetitive output for pages {start_page}-{end_page}, retrying")
+                    if retry < self.settings.MAX_RETRIES - 1:
+                        time.sleep(5)
+                        continue
+                    else:
+                        self.logger.error(f"Still repetitive after {self.settings.MAX_RETRIES} retries")
+                        return None
+                
+                return text
+                
+            except Exception as e:
+                error_str = str(e)
+                if '429' in error_str or 'RESOURCE_EXHAUSTED' in error_str or 'quota' in error_str.lower():
+                    wait_time = min(
+                        self.settings.INITIAL_BACKOFF * (self.settings.BACKOFF_MULTIPLIER ** retry),
+                        self.settings.MAX_BACKOFF
+                    )
+                    jitter = wait_time * 0.1 * (0.5 - random.random())
+                    total_wait = wait_time + jitter
+                    self.logger.warning(
+                        f"Rate limit hit on {model_name}, waiting {total_wait:.1f}s "
+                        f"(retry {retry+1}/{self.settings.MAX_RETRIES})"
+                    )
+                    time.sleep(total_wait)
+                else:
+                    self.logger.error(f"Error with {model_name} on pages {start_page}-{end_page}: {e}")
+                    if retry < self.settings.MAX_RETRIES - 1:
+                        time.sleep(5)
+                    else:
+                        break
+        
+        return None
+
     def _calculate_content_hash(self, content: str) -> str:
         normalized = content.lower().strip()
         return hashlib.md5(normalized.encode('utf-8')).hexdigest()
     
-    def _calculate_similarity(self, text1: str, text2: str) -> float:
-        return SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
-    
+    def _chunk_pdf_pages(self, uploaded_file: Any, total_pages: int,
+                        process_pages_per_request: int = 8,
+                        process_overlap_pages: int = 3) -> List[Dict[str, Any]]:
+        self.logger.info(f"Processing PDF: {total_pages} pages, "
+                        f"{process_pages_per_request} pages/chunk, "
+                        f"{process_overlap_pages} overlap")
+        
+        chunks = []
+        step = process_pages_per_request - process_overlap_pages
+        start_page = 1
+        chunk_position = 0
+        consecutive_failures = 0
+        max_consecutive_failures = 3
+        
+        while start_page <= total_pages:
+            end_page = min(start_page + process_pages_per_request - 1, total_pages)
+            
+            extraction_prompt = f"""EXTRACT COMPLETE TEXT từ trang {start_page}-{end_page}.
+
+                PDF FORMAT: 2 columns (IEEE style) with Vietnamese traditional medicine content
+
+                CRITICAL RULES:
+                1. Extract COMPLETE content - DO NOT summarize, skip, or paraphrase
+                2. MINIMUM 500-1000 characters per page (unless blank page)
+                3. NEVER repeat the same sentence/phrase more than once
+                4. If you see repetition in source, extract only ONCE
+
+                READING ORDER:
+                1. Read LEFT column from top to bottom
+                2. Then read RIGHT column from top to bottom
+
+                KEEP (preserve exactly):
+                - Medicine names in CAPITAL LETTERS + Chinese characters (蛇床子, 馬鞭草...)
+                - Scientific names in Latin (Cnidium monnieri, Verbena officinalis...)
+                - Chemical formulas (C₁₅H₁₆O₃, OCH₃, CO...)
+                - Chemical structure names (Ostola, Dictamin, Wedelolacton...)
+                - Dosage numbers (4-12g, 0.5g...)
+                - All prescriptions and detailed descriptions
+
+                REMOVE:
+                - Watermark: "https://trungtamthuoc.com/"
+                - Page numbers
+                - Standalone image captions (like "Hình 41", "Hình 42")
+
+                If medicine entry is CUT mid-page → KEEP IT (will be handled with overlap)
+
+                OUTPUT: Plain text only, no markdown, no commentary.
+
+                Begin extraction:
+            """
+            
+            # Try with primary model first
+            text = self._extract_with_model(
+                uploaded_file,
+                extraction_prompt,
+                self.settings.OCR_MODEL_NAME,
+                start_page,
+                end_page
+            )
+            
+            # If result too short and fallback enabled, retry with fallback model
+            if (text and len(text) < self.settings.MIN_OCR_LENGTH and
+                self.settings.RETRY_WITH_FALLBACK):
+                self.logger.warning(
+                    f"Pages {start_page}-{end_page}: too short ({len(text)} chars), "
+                    f"retrying with {self.settings.OCR_FALLBACK_MODEL}"
+                )
+                fallback_text = self._extract_with_model(
+                    uploaded_file,
+                    extraction_prompt,
+                    self.settings.OCR_FALLBACK_MODEL,
+                    start_page,
+                    end_page
+                )
+                
+                if fallback_text and len(fallback_text) > len(text):
+                    text = fallback_text
+                    self.logger.info(f"Fallback successful: {len(text)} chars")
+                else:
+                    self.logger.warning("Fallback didn't improve result")
+            
+            # Add to chunks if valid
+            if text and len(text) >= self.settings.MIN_OCR_LENGTH:
+                chunks.append({
+                    'text': text,
+                    'start_page': start_page,
+                    'end_page': end_page,
+                    'position': chunk_position,
+                    'hash': self._calculate_content_hash(text)
+                })
+                self.logger.info(f"Pages {start_page}-{end_page}: {len(text)} chars")
+                chunk_position += 1
+                consecutive_failures = 0
+            else:
+                self.logger.error(f"Pages {start_page}-{end_page}: extraction failed or too short")
+                consecutive_failures += 1
+                if consecutive_failures >= max_consecutive_failures:
+                    self.logger.error("Too many consecutive failures, stopping")
+                    return chunks
+            
+            start_page += step
+        
+        self.logger.info(f"Created {len(chunks)} chunks from {total_pages} pages")
+        return chunks
+
+    def _call_gemini_with_retry(self, prompt: str, chunk_info: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+        last_exception = None
+        
+        for attempt in range(self.settings.MAX_RETRIES):
+            try:
+                self.logger.info(f"API call {attempt + 1}/{self.settings.MAX_RETRIES}")
+                
+                self.wait_for_rate_limit()
+                
+                current_temperature = 0.0 if attempt == 0 else min(0.1 + (attempt * 0.15), 1.0)
+                
+                response = self.gemini_client.models.generate_content(
+                    model=self.settings.TEXT_MODEL_NAME,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=current_temperature,
+                        response_mime_type="application/json",
+                        max_output_tokens=self.settings.MAX_OUTPUT_TOKENS,
+                        stop_sequences=["###END###"]
+                    )
+                )
+                
+                response_text = response.text.strip()
+                if self.is_repetitive(response_text):
+                    self.logger.warning(f"Detected repetitive response, retrying (attempt {attempt+1})")
+                    time.sleep(5)
+                    continue
+                
+                result = json.loads(response_text)
+                result = validate_json_structure(result)
+                
+                herbs_count = len(result.get('vi_thuoc', []))
+                prescriptions_count = len(result.get('bai_thuoc', []))
+                formulas_count = len(result.get('cong_thuc', []))
+                self.logger.info(f"Extracted: {herbs_count} herbs, "
+                            f"{prescriptions_count} prescriptions, "
+                            f"{formulas_count} formulas")
+                
+                if chunk_info:
+                    result['_metadata'] = {
+                        'start_page': chunk_info.get('start_page'),
+                        'end_page': chunk_info.get('end_page'),
+                        'position': chunk_info.get('position')
+                    }
+                
+                return result
+                
+            except json.JSONDecodeError as e:
+                self.logger.error(f"JSON parse error: {e}")
+                if hasattr(response, 'text'):
+                    self.logger.debug(f"Response preview: {response.text[:300]}...")
+                last_exception = e
+                
+            except Exception as e:
+                error_str = str(e)
+                last_exception = e
+                
+                if '429' in error_str or 'RESOURCE_EXHAUSTED' in error_str:
+                    wait_time = min(
+                        self.settings.INITIAL_BACKOFF * (self.settings.BACKOFF_MULTIPLIER ** attempt),
+                        self.settings.MAX_BACKOFF
+                    )
+                    jitter = wait_time * 0.1 * (0.5 - random.random())
+                    total_wait = wait_time + jitter
+                    self.logger.warning(f"Rate limit, waiting {total_wait:.1f}s...")
+                    time.sleep(total_wait)
+                else:
+                    self.logger.error(f"API error: {str(e)}")
+                    if attempt < self.settings.MAX_RETRIES - 1:
+                        wait_time = self.settings.INITIAL_BACKOFF * (2 ** attempt)
+                        self.logger.info(f"Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+        
+        self.logger.error(f"Failed after {self.settings.MAX_RETRIES} attempts")
+        return None
+
     def _is_duplicate(self, herb: Dict[str, Any], existing_herbs: List[Dict[str, Any]]) -> bool:
         name = herb.get('ten_viet_nam', '').strip()
         scientific_name = herb.get('ten_khoa_hoc', '').strip()
@@ -195,6 +476,9 @@ class DataExtractor:
                     return True
         
         return False
+
+    def _calculate_similarity(self, text1: str, text2: str) -> float:
+        return SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
     
     def _merge_duplicate_herbs(self, herb1: Dict[str, Any], herb2: Dict[str, Any]) -> Dict[str, Any]:
         merged = herb1.copy()
@@ -211,227 +495,6 @@ class DataExtractor:
                     merged[key] = value
         
         return merged
-    
-    def _extract_with_model(self, uploaded_file: Any, prompt: str, 
-                       model_name: str, start_page: int, end_page: int) -> Optional[str]:
-        """Extract text using specified model with retry logic"""
-        
-        for retry in range(self.settings.MAX_RETRIES):
-            try:
-                response = self.gemini_client.models.generate_content(
-                    model=model_name,
-                    contents=[uploaded_file, prompt],
-                    config=types.GenerateContentConfig(
-                        temperature=0.0,
-                        max_output_tokens=self.settings.MAX_OUTPUT_TOKENS
-                    )
-                )
-                
-                text = response.text.strip()
-                
-                # Add delay
-                time.sleep(self.settings.DELAY_BETWEEN_REQUESTS)
-                return text
-                
-            except Exception as e:
-                error_str = str(e)
-                
-                if '429' in error_str or 'RESOURCE_EXHAUSTED' in error_str:
-                    wait_time = min(
-                        self.settings.INITIAL_BACKOFF * (self.settings.BACKOFF_MULTIPLIER ** retry),
-                        self.settings.MAX_BACKOFF
-                    )
-                    jitter = wait_time * 0.1 * (0.5 - random.random())
-                    total_wait = wait_time + jitter
-                    
-                    self.logger.warning(
-                        f"Rate limit hit on {model_name}, waiting {total_wait:.1f}s "
-                        f"(retry {retry+1}/{self.settings.MAX_RETRIES})"
-                    )
-                    time.sleep(total_wait)
-                else:
-                    self.logger.error(f"Error with {model_name} on pages {start_page}-{end_page}: {e}")
-                    break
-        
-        return None
-
-    def _chunk_pdf_pages(self, uploaded_file: Any, total_pages: int,
-                     process_pages_per_request: int = 8,
-                     process_overlap_pages: int = 3) -> List[Dict[str, Any]]:
-        self.logger.info(f"Processing PDF: {total_pages} pages, "
-                        f"{process_pages_per_request} pages/chunk, "
-                        f"{process_overlap_pages} overlap")
-        
-        chunks = []
-        step = process_pages_per_request - process_overlap_pages
-        start_page = 1
-        chunk_position = 0
-        consecutive_failures = 0
-        max_consecutive_failures = 3
-        
-        while start_page <= total_pages:
-            end_page = min(start_page + process_pages_per_request - 1, total_pages)
-            
-            extraction_prompt = f"""EXTRACT TEXT từ trang {start_page}-{end_page}.
-
-                    PDF FORMAT: 2 columns (IEEE style) with Vietnamese medicine content
-
-                    CRITICAL: Extract COMPLETE content, DON'T summarize or skip
-
-                    READING ORDER:
-                    1. Read LEFT column from top to bottom
-                    2. Then read RIGHT column from top to bottom
-
-                    KEEP (preserve exactly):
-                    - Medicine names in CAPITAL LETTERS + Chinese characters (蛇床子, 馬鞭草...)
-                    - Scientific names in Latin (Cnidium monnieri, Verbena officinalis...)
-                    - Chemical formulas (C₁₅H₁₆O₃, OCH₃, CO...)
-                    - Chemical structure names (Ostola, Dictamin, Wedelolacton...)
-                    - Sections A, B, C, D, E
-                    - Dosage numbers (4-12g, 0.5g...)
-                    - All prescriptions and recipes
-
-                    REMOVE:
-                    - Watermark: "https://trungtamthuoc.com/"
-                    - Page numbers
-                    - Standalone image captions (like "Hình 41", "Hình 42")
-
-                    If medicine entry is CUT mid-page → KEEP IT (will be handled with overlap)
-
-                    NEVER repeat the same sentence more than once
-
-                    OUTPUT: Plain text, no markdown, no summary.
-
-                    Begin extraction:
-                """
-            
-            # Try with primary model first
-            text = self._extract_with_model(
-                uploaded_file, 
-                extraction_prompt,
-                self.settings.OCR_MODEL_NAME,
-                start_page,
-                end_page
-            )
-            
-            # If result too short and fallback enabled, retry with fallback model
-            if (text and len(text) < self.settings.MIN_OCR_LENGTH and 
-                self.settings.RETRY_WITH_FALLBACK):
-                
-                self.logger.warning(
-                    f"Pages {start_page}-{end_page}: too short ({len(text)} chars), "
-                    f"retrying with {self.settings.OCR_FALLBACK_MODEL}"
-                )
-                
-                fallback_text = self._extract_with_model(
-                    uploaded_file,
-                    extraction_prompt,
-                    self.settings.OCR_FALLBACK_MODEL,
-                    start_page,
-                    end_page
-                )
-                
-                # Use fallback if it's better
-                if fallback_text and len(fallback_text) > len(text):
-                    text = fallback_text
-                    self.logger.info(f"Fallback successful: {len(text)} chars")
-                else:
-                    self.logger.warning("Fallback didn't improve result")
-            
-            # Add to chunks if valid
-            if text and len(text) >= self.settings.MIN_OCR_LENGTH:
-                chunks.append({
-                    'text': text,
-                    'start_page': start_page,
-                    'end_page': end_page,
-                    'position': chunk_position,
-                    'hash': self._calculate_content_hash(text)
-                })
-                self.logger.info(f"Pages {start_page}-{end_page}: {len(text)} chars")
-                chunk_position += 1
-                consecutive_failures = 0
-            else:
-                self.logger.error(f"Pages {start_page}-{end_page}: extraction failed")
-                consecutive_failures += 1
-                if consecutive_failures >= max_consecutive_failures:
-                    self.logger.error("Too many consecutive failures, stopping")
-                    return chunks
-            
-            start_page += step
-        
-        self.logger.info(f"Created {len(chunks)} chunks from {total_pages} pages")
-        return chunks
-
-    def _call_gemini_with_retry(self, prompt: str, chunk_info: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
-        last_exception = None
-
-        for attempt in range(self.settings.MAX_RETRIES):
-            try:
-                self.logger.info(f"API call {attempt + 1}/{self.settings.MAX_RETRIES}")
-                current_temperature = 0.0 if attempt == 0 else min(0.1 + (attempt * 0.15), 1.0)
-
-                response = self.gemini_client.models.generate_content(
-                    model=self.settings.TEXT_MODEL_NAME,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=current_temperature,
-                        response_mime_type="application/json",
-                        max_output_tokens=self.settings.MAX_OUTPUT_TOKENS,
-                    )
-                )
-                # Parse and validate
-                result = json.loads(response.text)
-                result = validate_json_structure(result)
-                
-                # Log success
-                herbs_count = len(result.get('vi_thuoc', []))
-                prescriptions_count = len(result.get('bai_thuoc', []))
-                formulas_count = len(result.get('cong_thuc', []))
-                
-                self.logger.info(f"Extracted: {herbs_count} herbs, "
-                               f"{prescriptions_count} prescriptions, "
-                               f"{formulas_count} formulas")
-                
-                # Add metadata if provided
-                if chunk_info:
-                    result['_metadata'] = {
-                        'start_page': chunk_info.get('start_page'),
-                        'end_page': chunk_info.get('end_page'),
-                        'position': chunk_info.get('position')
-                    }
-                
-                time.sleep(self.settings.DELAY_BETWEEN_REQUESTS)
-                return result
-                
-            except json.JSONDecodeError as e:
-                self.logger.error(f"JSON parse error: {e}")
-                if hasattr(response, 'text'):
-                    self.logger.debug(f"Response preview: {response.text[:300]}...")
-                last_exception = e
-                
-            except Exception as e:
-                error_str = str(e)
-                last_exception = e
-                
-                if '429' in error_str or 'RESOURCE_EXHAUSTED' in error_str:
-                    wait_time = min(
-                        self.settings.INITIAL_BACKOFF * (self.settings.BACKOFF_MULTIPLIER ** attempt),
-                        self.settings.MAX_BACKOFF
-                    )
-                    jitter = wait_time * 0.1 * (0.5 - random.random())
-                    total_wait = wait_time + jitter
-                    
-                    self.logger.warning(f"Rate limit, waiting {total_wait:.1f}s...")
-                    time.sleep(total_wait)
-                else:
-                    self.logger.error(f"API error: {str(e)}")
-                    if attempt < self.settings.MAX_RETRIES - 1:
-                        wait_time = self.settings.INITIAL_BACKOFF * (2 ** attempt)
-                        self.logger.info(f"Retrying in {wait_time}s...")
-                        time.sleep(wait_time)
-        
-        self.logger.error(f"Failed after {self.settings.MAX_RETRIES} attempts")
-        return None
 
     def _deduplicate_results(self, data: Dict[str, Any]) -> Dict[str, Any]:
         self.logger.info("Deduplicating results with similarity matching...")
@@ -533,7 +596,45 @@ class DataExtractor:
             self.logger.error(f"Save error: {e}")
             raise
 
-    def process_pdf_file(self, pdf_path: str) -> Dict[str, Any]:
+    def _load_checkpoint(self) -> Dict[str, Any]:
+        if os.path.exists(self.settings.CHECKPOINT_FILE):
+            try:
+                with open(self.settings.CHECKPOINT_FILE, 'r', encoding='utf-8') as f:
+                    checkpoint = json.load(f)
+                self.logger.info(f"Loaded checkpoint: {len(checkpoint.get('processed_chunks', []))} chunks processed")
+                return checkpoint
+            except Exception as e:
+                self.logger.warning(f"Failed to load checkpoint: {e}")
+
+        return {
+            'processed_chunks': [],
+            'all_results': {
+                'vi_thuoc': [],
+                'bai_thuoc': [],
+                'cong_thuc': []
+            }
+        }
+    
+    def _save_checkpoint(self, processed_chunks: List[str], all_results: Dict, error: str = None):
+        try:
+            checkpoint = {
+                'processed_chunks': processed_chunks,
+                'all_results': all_results,
+                'total_processed': len(processed_chunks),
+                'last_updated': datetime.now().isoformat(),
+            }
+            
+            if error:
+                checkpoint['last_error'] = error
+            
+            with open(self.settings.CHECKPOINT_FILE, 'w', encoding='utf-8') as f:
+                json.dump(checkpoint, f, ensure_ascii=False, indent=2)
+                
+            self.logger.info(f"Checkpoint saved: {len(processed_chunks)} chunks")
+        except Exception as e:
+            self.logger.error(f"Failed to save checkpoint: {e}")
+
+    def process_pdf_file(self, pdf_path: str, skip_processed: bool = True) -> Dict[str, Any]:
         self.logger.info(f"Processing: {safe_path(pdf_path)}")
         self.logger.info(f"Model for OCR: {self.settings.OCR_MODEL_NAME}")
         self.logger.info(f"Model for text extraction: {self.settings.TEXT_MODEL_NAME}")
@@ -542,6 +643,12 @@ class DataExtractor:
         pdf_path_obj = Path(pdf_path)
         if not pdf_path_obj.exists():
             raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+        
+        checkpoint = self._load_checkpoint() if skip_processed else {'processed_chunks': [], 'all_results': {'vi_thuoc': [], 'bai_thuoc': [], 'cong_thuc': []}}
+        processed_chunk_ids = set(checkpoint.get('processed_chunks', []))
+        
+        if processed_chunk_ids:
+            self.logger.info(f"Resuming from checkpoint: {len(processed_chunk_ids)} chunks already done")
         
         # Split large PDF into chunks
         splitted_pdf_paths = self._split_pdf_file(
@@ -552,17 +659,23 @@ class DataExtractor:
         )
         
         # Initialize results OUTSIDE the loop
-        all_results = {
+        all_results = checkpoint.get('all_results', {
             'vi_thuoc': [],
             'bai_thuoc': [],
             'cong_thuc': []
-        }
+        })
         
         total_successful_chunks = 0
         total_failed_chunks = 0
         
         # Process each PDF chunk
         for chunk_idx, pdf_chunk_path in enumerate(splitted_pdf_paths):
+            chunk_id = os.path.basename(pdf_chunk_path)
+            
+            if chunk_id in processed_chunk_ids:
+                self.logger.info(f"Skipping already processed chunk: {chunk_id}")
+                continue
+            
             self.logger.info(f"Processing chunk {chunk_idx + 1}/{len(splitted_pdf_paths)}: {safe_path(pdf_chunk_path)}")
             
             try:
@@ -587,7 +700,7 @@ class DataExtractor:
                 for chunk_info in text_chunks:
                     self.logger.info(f"Processing text chunk {chunk_info['position'] + 1}/{len(text_chunks)}")
                     self.logger.info(f"Pages {chunk_info['start_page']}-{chunk_info['end_page']}: "
-                                   f"{len(chunk_info['text'])} chars")
+                                f"{len(chunk_info['text'])} chars")
                     
                     prompt = EXTRACTION_PROMPT.format(text=chunk_info['text'])
                     result = self._call_gemini_with_retry(prompt, chunk_info)
@@ -613,9 +726,21 @@ class DataExtractor:
                 except Exception as e:
                     self.logger.warning(f"Cleanup warning: {e}")
                 
+                processed_chunk_ids.add(chunk_id)
+                self._save_checkpoint(
+                    processed_chunks=list(processed_chunk_ids),
+                    all_results=all_results
+                )
+                
             except Exception as e:
                 self.logger.error(f"Error processing chunk {chunk_idx + 1}: {e}")
                 total_failed_chunks += 1
+                
+                self._save_checkpoint(
+                    processed_chunks=list(processed_chunk_ids),
+                    all_results=all_results,
+                    error=str(e)
+                )
                 continue
 
         # Deduplicate and save
@@ -628,6 +753,10 @@ class DataExtractor:
         
         all_results = self._deduplicate_results(all_results)
         self._save_to_files(all_results)
+        
+        if os.path.exists(self.settings.CHECKPOINT_FILE):
+            os.remove(self.settings.CHECKPOINT_FILE)
+            self.logger.info("Checkpoint file removed (processing completed)")
         
         # Summary
         self.logger.info(f"Successful chunks: {total_successful_chunks}")
