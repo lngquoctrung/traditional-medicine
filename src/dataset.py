@@ -229,24 +229,37 @@ class DataExtractor:
         while start_page <= total_pages:
             end_page = min(start_page + process_pages_per_request - 1, total_pages)
             
-            extraction_prompt = f"""
-                Trích xuất VĂN BẢN từ trang {start_page} đến trang {end_page} của PDF 2 CỘT (kiểu IEEE).
+            extraction_prompt = f"""EXTRACT TEXT từ trang {start_page}-{end_page}.
 
-                LƯU Ý QUAN TRỌNG: Trả về TEXT gốc, KHÔNG tóm tắt.
+                PDF FORMAT: 2 columns (IEEE style) with Vietnamese medicine content
 
-                YÊU CẦU:
-                1. ĐỌC ĐÚNG THỨ TỰ: Cột trái hoàn chỉnh → Cột phải
-                2. Trích xuất TOÀN BỘ nội dung từ các trang này
-                3. GIỮ NGUYÊN:
-                - Tiêu đề vị thuốc (IN HOA + chữ Hán)
-                - Các phần A, B, C, D, E
-                - Tên khoa học, công thức hóa học
-                - Đơn thuốc và liều dùng
-                4. LOẠI BỎ: Header, footer, số trang, watermark "https://trungtamthuoc.com/", chú thích hình ảnh riêng lẻ
-                5. Nếu vị thuốc bị cắt giữa chừng -> giữ nguyên, đừng bỏ
-                6. TUYỆT ĐỐI KHÔNG lặp lại một câu hoặc một đoạn văn quá 2 lần. Nếu văn bản gốc bị lỗi lặp, hãy chỉ lấy thông tin một lần duy nhất.
+                CRITICAL: Extract COMPLETE content, DON'T summarize or skip
 
-                Bắt đầu trích xuất trang {start_page}-{end_page}:
+                READING ORDER:
+                1. Read LEFT column from top to bottom
+                2. Then read RIGHT column from top to bottom
+
+                KEEP (preserve exactly):
+                - Medicine names in CAPITAL LETTERS + Chinese characters (蛇床子, 馬鞭草...)
+                - Scientific names in Latin (Cnidium monnieri, Verbena officinalis...)
+                - Chemical formulas (C₁₅H₁₆O₃, OCH₃, CO...)
+                - Chemical structure names (Ostola, Dictamin, Wedelolacton...)
+                - Sections A, B, C, D, E
+                - Dosage numbers (4-12g, 0.5g...)
+                - All prescriptions and recipes
+
+                REMOVE:
+                - Watermark: "https://trungtamthuoc.com/"
+                - Page numbers
+                - Standalone image captions (like "Hình 41", "Hình 42")
+
+                If medicine entry is CUT mid-page → KEEP IT (will be handled with overlap)
+
+                NEVER repeat the same sentence more than once
+
+                OUTPUT: Plain text, no markdown, no summary.
+
+                Begin extraction:
             """
             
             for retry in range(self.settings.MAX_RETRIES):
